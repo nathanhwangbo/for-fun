@@ -11,7 +11,6 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(tidymodels)
 library(poissonreg)
-library(RColorBrewer)
 ```
 
 there's a picture puzzle mapping numbers 1-100 to different color combinations. spoiler alert ----- the color scheme for each number represents its prime factorization (so each prime has a unique color). 
@@ -159,8 +158,10 @@ plot_number(picture_data_long, 1:100)
 
 
 #### now generate new test data to see how well the scheme is learned
-note we use sample colors column by column (eg 97 can't show up anywhere other than the first column)
+note we have to sample the colors  column by column (eg 97 can't show up anywhere other than the first column)
 so we can't separate color from its position
+
+our models also won't be able to generalize to new primes :(
 ```{r}
 set.seed(20200901)
 test_data <- purrr::map_dfc(picture_data_wide, 
@@ -205,7 +206,8 @@ test_data %>%
   ggplot(aes(truth, .pred)) +
   geom_point() + 
   geom_abline(slope = 1, intercept = 0) + 
-  labs(title = 'practically perfect prediction', 
+  labs(title = 'practically perfect prediction',
+       subtitle = '(y = x line plotted)',
        x = 'truth', 
        y = 'prediction')
 ```
