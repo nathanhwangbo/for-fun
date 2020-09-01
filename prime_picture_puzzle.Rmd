@@ -110,6 +110,8 @@ plot_number <- function(data, num){
 
 idea: struture the data by having one number per row, and each column being a color in the picture going left to right. eg the last row will be (100, 2, 2, 5, 5, 1, 1). 1, 2 and 5 are all treated as factors, and 1 is the factor level for "no color", because 100 has only 4 prime factors. just like in the picture, prime factors are sorted going small -> large from left -> right
 
+i'm not going to map the prime factors to colors until the very end, but it doesn't matter as long as I'm careful to treat the numbers as categorical variables
+
 
 ```{r, message = F}
 set.seed(20200901)
