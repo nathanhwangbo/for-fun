@@ -1,0 +1,293 @@
+---
+title: "nba draft helper"
+author: "Nathan Hwangbo"
+date: "12/18/2020"
+output: html_document
+---
+
+small script to get familiar with r nba package
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+load libraries
+```{r libs, warning = F, message = F}
+#devtools::install_github('abresler/nbastatR')
+library(nbastatR)
+library(tidyverse)
+```
+
+
+```{r dat}
+
+#2017-2020 season. training dat
+players20172020 <- bref_players_stats(seasons = 2018:2020, 'per_game') %>%
+  select(namePlayer, groupPosition, slugPosition, yearSeason, agePlayer, 
+         slugTeamBREF, countGamesStarted, ends_with("PerGame"))
+
+# get new rosters
+rosters2021 <- seasons_rosters(2021) %>%
+  select(namePlayer, slugTeam)
+
+train_df <- players20172020 %>%
+  left_join(rosters2021, by = 'namePlayer') %>%
+  mutate(team = ifelse(is.na(slugTeam), slugTeamBREF, slugTeam)) %>%
+  select(-slugTeam, -slugTeamBREF) %>%
+  mutate(yahoo = ptsPerGame + 1.2*trbPerGame + 1.5*astPerGame + 
+           3*stlPerGame + 3*blkPerGame - tovPerGame) %>%
+  arrange(desc(yahoo)) %>%
+  # player summary
+  group_by(namePlayer) %>%
+  mutate(is_improve = yearSeason[1] == 2019) %>%
+  ungroup() %>%
+  # team summary
+  group_by(team, yearSeason) %>%
+  mutate(team_med_yahoo = median(yahoo)) %>%
+  ungroup()
+  
+  
+
+  
+
+
+```
+
+
+Team quality
+```{r}
+train_df %>% 
+  distinct(team, yearSeason, team_med_yahoo) %>% 
+  arrange(yearSeason, desc(team_med_yahoo)) %>% 
+  ggplot() + 
+  geom_col(aes(team, team_med_yahoo)) + 
+  facet_wrap(~yearSeason) +
+  coord_flip()
+```
+
+
+identify teams with 1 star
+
+```{r}
+train_df %>%
+  group_by(team, yearSeason) %>%
+  summarize(first_diff = yahoo[1] - yahoo[2]) %>%
+  arrange(desc(first_diff))
+  
+
+```
+
+
+
+category scoring setup
+```{r}
+# only take categories of interest
+
+cat_df <- train_df %>%
+  filter(minutesPerGame > 20) %>%
+  transmute(name = namePlayer, pos = groupPosition, year = yearSeason, agePlayer, countGamesStarted, 
+            num_min = minutesPerGame,
+            ptsPerGame, trbPerGame, astPerGame, stlPerGame, blkPerGame, fg3mPerGame,
+            ftpPerGame = ifelse(ftaPerGame > 0, ftmPerGame / ftaPerGame, 0),
+            fgpPerGame = ifelse(fgaPerGame > 0, fgmPerGame / fgaPerGame, 0),
+            tovPerGame
+            ) %>%
+  pivot_longer(ends_with('PerGame'), 
+               names_to = 'stat',
+               values_to = 'pergame')
+
+
+```
+
+best 5 players by category
+```{r}
+cat_df %>%
+  group_by(stat, year) %>%
+  slice_max(pergame, n = 25) %>%
+  ungroup() %>%
+  group_by(name) %>%
+  mutate(is_tov = ifelse(any(stat == 'tovPerGame'), 1, 0),
+         num_years = length(unique(year))) %>%
+  group_by(name, year) %>%
+  mutate(num_cat = n() - max(is_tov)) %>%
+  ungroup() %>%
+  arrange(desc(num_cat), name, desc(year)) %>%
+  filter(num_cat >=3) %>%
+  View
+
+```
+
+
+category breakdown -- how likely am i to win each of the columns?
+```{r}
+cat_df %>%
+  group_by(year, stat) %>%
+  mutate(statscale = (pergame - min(pergame)) / (max(pergame) - min(pergame))) %>%
+  summarize(stat_var = var(statscale)) %>%
+  ggplot() + 
+  geom_col(aes(stat, stat_var)) +
+  coord_flip() + 
+  facet_wrap(~year)
+
+```
+
+```{r}
+cat_df %>%
+  group_by(year, stat) %>%
+  mutate(pergamescale = (pergame - min(pergame)) / (max(pergame) - min(pergame))) %>%
+  ungroup() %>%
+  ggplot() + 
+  geom_histogram(aes(pergamescale)) + 
+  facet_grid(year~stat)
+```
+
+
+
+
+Question 1. which category is most consistent? e.g. if the ranking of steal leaders is consistent every year, that means that picking a high ranking stealer is beneficial
+
+
+Question 2. how big are the differences in ranking? e.g. if one player leads steals every year consistently, it might not matter if the difference is only ~1 steal per game off. 
+
+So we want to emphasize players who dominate categories consistently, where "domination" must be meaningfully large for fantasy points.
+
+
+
+
+
+
+
+Idea: sample 100,000 fantasy teams by randomly selecting players (say, 2018-19). For each team, record the score for each of the categories. See which players consistently appear on winning teams
+
+```{r}
+# given a year, create a sample of 10 players and see how well they do
+# input: year
+# output: summed performance in each elague.
+sample_team <- function(year){
+  roster <- train_df %>% 
+    filter(yearSeason == year, minutesPerGame > 20) %>%
+    sample_n(10, replace = F)
+  
+  
+  roster_long <- roster %>%
+    transmute(name = namePlayer, pos = groupPosition, year = yearSeason, agePlayer, countGamesStarted, 
+            num_min = minutesPerGame,
+            ptsPerGame, trbPerGame, astPerGame, stlPerGame, blkPerGame, fg3mPerGame,
+            ftpPerGame = ifelse(ftaPerGame > 0, ftmPerGame / ftaPerGame, 0),
+            fgpPerGame = ifelse(fgaPerGame > 0, fgmPerGame / fgaPerGame, 0),
+            tovPerGame
+            ) %>%
+  pivot_longer(ends_with('PerGame'), 
+               names_to = 'stat',
+               values_to = 'pergame') %>%
+    arrange(stat)
+  
+  # put it in a single vector so we can stretch it out later lol
+  agg_stats <- roster_long %>%
+    group_by(stat) %>%
+    summarize(total = sum(pergame), .groups = 'drop') %>%
+    ungroup() %>%
+    pull(total) %>%
+    round(2) %>%
+    paste(collapse = "__")
+  
+  roster_long %>%
+    mutate(stats = agg_stats)
+}
+
+team_sim <- tibble(runs = 1:100000,
+                   team = map(runs, ~sample_team(2019)),
+                   players = map(team, ~unique(.x$name)),
+                   stats = map_chr(team, ~unique(.x$stats))
+                   ) %>%
+  separate(stats, into = sort(unique(cat_df$stat)), sep = "__", remove = T, convert = T) %>%
+  mutate(across(ends_with('PerGame'), ~rank(-.x))) %>%
+  mutate(sum_rank = reduce(select(., ends_with('PerGame')), `+`))
+
+
+
+
+```
+
+get the best players on avg (2019-2020 season)
+```{r}
+best2019 <- team_sim %>%
+  unnest(players) %>%
+  group_by(players) %>%
+  summarize(n_sampled = length(unique(runs)),
+            med_sumrank = median(sum_rank),
+            .groups = 'drop'
+            ) %>%
+  arrange(med_sumrank)
+
+```
+
+
+how does this compare to 2020? are the best players consistent?
+
+```{r}
+team_sim2020 <- tibble(runs = 1:100000,
+                   team = map(runs, ~sample_team(2020)),
+                   players = map(team, ~unique(.x$name)),
+                   stats = map_chr(team, ~unique(.x$stats))
+                   ) %>%
+  separate(stats, into = sort(unique(cat_df$stat)), sep = "__", remove = T, convert = T) %>%
+  mutate(across(ends_with('PerGame'), ~rank(-.x))) %>%
+  mutate(sum_rank = reduce(select(., ends_with('PerGame')), `+`))
+
+```
+
+```{r}
+best2020 <- team_sim2020 %>%
+  unnest(players) %>%
+  group_by(players) %>%
+  summarize(n_sampled = length(unique(runs)),
+            med_sumrank = median(sum_rank),
+            .groups = 'drop'
+            ) %>%
+  arrange(med_sumrank)
+
+```
+
+
+compile 2019, 2020 data to see if they're consistent
+```{r}
+best1920 <- best2020 %>%
+  rename(n_sampled2020 = n_sampled, med_sumrank2020 = med_sumrank) %>%
+  inner_join(best2019, by = 'players') %>%
+  mutate(across(starts_with('med'), ~ rank(.x)))
+
+
+best1920 %>%
+  summarize(rank_cor = cor(med_sumrank, med_sumrank2020))  
+```
+
+now that we know that results are pretty consistent, let's use a weighted average of the two ranks to complete the analysis.
+```{r}
+# first, get a list of player positions
+player_pos <- train_df %>%
+  separate_rows(slugPosition, sep = '-') %>%
+  distinct(namePlayer, slugPosition) %>%
+  group_by(namePlayer) %>%
+  mutate(num_pos = n()) %>%
+  ungroup() %>%
+  rename(players = namePlayer, pos = slugPosition)
+
+draft_selector <- best1920 %>%
+  mutate(avg_rank = 0.55 * med_sumrank2020 + 0.45*med_sumrank) %>%
+  arrange(avg_rank) %>%
+  select(players, avg_rank) %>%
+  left_join(player_pos, by = 'players')
+```
+
+draft idea: to start the draft, look at the overall list. to start filling out positions, look at the position specific dataframes
+```{r}
+
+draft_selector
+
+draft_selector %>%
+  group_by(pos) %>%
+  slice_min(avg_rank, n = 20) %>% 
+  group_split()
+```
